@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 from groq import AsyncGroq
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.sse import sse_client
 from pydantic import AnyUrl
 
 from typing import List, Dict, Tuple, TypedDict
@@ -67,11 +68,19 @@ class MCP_ChatBot:
         local_stack = AsyncExitStack()
 
         try:
-            server_params = StdioServerParameters(**server_config)
+            if "url" in server_config:
+                # Remote server over SSE, e.g. {"url": "http://127.0.0.1:8001/sse"}
+                transport = sse_client(
+                    server_config["url"],
+                    headers=server_config.get("headers"),
+                    # Free Render instances sleep and can take ~30-60s to wake
+                    timeout=server_config.get("timeout", 60),
+                )
+            else:
+                # Local server launched as a subprocess over stdio
+                transport = stdio_client(StdioServerParameters(**server_config))
 
-            read, write = await local_stack.enter_async_context(
-                stdio_client(server_params)
-            )
+            read, write = await local_stack.enter_async_context(transport)
 
             session = await local_stack.enter_async_context(
                 ClientSession(read, write)

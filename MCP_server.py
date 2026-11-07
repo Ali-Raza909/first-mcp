@@ -9,7 +9,8 @@ from mcp.server.fastmcp import FastMCP
 PAPER_DIR = "papers"
 
 # initialize FastMCP server
-mcp = FastMCP("research")
+PORT = int(os.environ.get("PORT", 8001))  # Render sets PORT; 8001 locally
+mcp = FastMCP("research", host="0.0.0.0", port=PORT)
 
 
 def log(message: str) -> None:
@@ -203,5 +204,6 @@ def generate_search_prompt(topic: str, num_papers: int = 5) -> str:
 
 
 if __name__ == "__main__":
-    # initialize and run the server
-    mcp.run(transport="stdio")
+    # Run as a standalone SSE server at http://127.0.0.1:8001/sse
+    # (start it in its own terminal: uv run MCP_server.py)
+    mcp.run(transport="sse")

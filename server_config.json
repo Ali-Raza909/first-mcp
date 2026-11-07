@@ -9,9 +9,8 @@
             ]
         },
         "research": {
-    "command": "uv",
-    "args": ["run", "MCP_server.py"]
-},
+            "url": "http://127.0.0.1:8001/sse"
+        },
         "fetch": {
             "command": "uvx",
             "args": ["mcp-server-fetch"]
