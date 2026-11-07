@@ -2,14 +2,17 @@ from dotenv import load_dotenv
 from groq import AsyncGroq
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from pydantic import AnyUrl
 
-from typing import List, Dict, TypedDict
+from typing import List, Dict, Tuple, TypedDict
 from contextlib import AsyncExitStack
 
 import json
 import asyncio
 import os
-# jiooooooooooooooo
+import re
+import shlex
+
 
 load_dotenv()
 
@@ -17,6 +20,16 @@ load_dotenv()
 class ToolDefinition(TypedDict):
     type: str
     function: dict
+
+
+def _get(obj, *names, default=None):
+    """Read the first attribute that exists (handles mcp 1.x camelCase
+    and mcp 2.x snake_case names)."""
+    for name in names:
+        value = getattr(obj, name, None)
+        if value is not None:
+            return value
+    return default
 
 
 class MCP_ChatBot:
@@ -30,11 +43,20 @@ class MCP_ChatBot:
         self.groq = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
         self.model = "openai/gpt-oss-120b"
 
-        # Available MCP tools (in Groq/OpenAI format)
+        # Tools (Groq/OpenAI format) and which session owns each
         self.available_tools: List[ToolDefinition] = []
-
-        # Map tool names to their MCP sessions
         self.tool_to_session: Dict[str, ClientSession] = {}
+
+        # Resources: static URIs and URI templates, each mapped to a session
+        self.resource_to_session: Dict[str, ClientSession] = {}
+        self.resource_templates: List[Tuple[str, ClientSession]] = []
+
+        # Prompts: name -> (prompt object, session)
+        self.prompts: Dict[str, Tuple[object, ClientSession]] = {}
+
+    # ------------------------------------------------------------------
+    # Connection
+    # ------------------------------------------------------------------
 
     async def connect_to_server(self, server_name: str, server_config: dict) -> None:
         """Connect to a single MCP server.
@@ -57,23 +79,16 @@ class MCP_ChatBot:
 
             await session.initialize()
 
+            # ---- Tools ----
             response = await session.list_tools()
             tools = response.tools
 
-            print(
-                f"\nConnected to {server_name} with tools:",
-                [tool.name for tool in tools],
-            )
-
             new_tools = []
             for tool in tools:
-                # Newer mcp versions use input_schema, older use inputSchema
-                schema = (
-                    getattr(tool, "input_schema", None)
-                    or getattr(tool, "inputSchema", None)
-                    or {"type": "object", "properties": {}}
+                schema = _get(
+                    tool, "input_schema", "inputSchema",
+                    default={"type": "object", "properties": {}},
                 )
-
                 new_tools.append({
                     "type": "function",
                     "function": {
@@ -83,10 +98,55 @@ class MCP_ChatBot:
                     },
                 })
 
+            # ---- Resources (optional: not every server supports them) ----
+            static_uris: List[str] = []
+            template_uris: List[str] = []
+
+            try:
+                res = await session.list_resources()
+                static_uris = [str(r.uri).rstrip("/") for r in res.resources]
+            except Exception:
+                pass
+
+            try:
+                tmpl = await session.list_resource_templates()
+                templates = _get(
+                    tmpl, "resource_templates", "resourceTemplates", default=[]
+                )
+                template_uris = [
+                    str(_get(t, "uri_template", "uriTemplate")) for t in templates
+                ]
+            except Exception:
+                pass
+
+            # ---- Prompts (optional) ----
+            prompt_list = []
+            try:
+                pr = await session.list_prompts()
+                prompt_list = pr.prompts
+            except Exception:
+                pass
+
+            print(f"\nConnected to {server_name}:")
+            print(f"  tools:     {[t.name for t in tools]}")
+            if static_uris or template_uris:
+                print(f"  resources: {static_uris + template_uris}")
+            if prompt_list:
+                print(f"  prompts:   {[p.name for p in prompt_list]}")
+
             # Only register after everything succeeded
             for tool, definition in zip(tools, new_tools):
                 self.tool_to_session[tool.name] = session
                 self.available_tools.append(definition)
+
+            for uri in static_uris:
+                self.resource_to_session[uri] = session
+
+            for template in template_uris:
+                self.resource_templates.append((template, session))
+
+            for prompt in prompt_list:
+                self.prompts[prompt.name] = (prompt, session)
 
             self.sessions.append(session)
 
@@ -114,6 +174,124 @@ class MCP_ChatBot:
         except Exception as e:
             print(f"Error loading server configuration: {e}")
             raise
+
+    # ------------------------------------------------------------------
+    # Resources
+    # ------------------------------------------------------------------
+
+    def _find_resource_session(self, uri: str):
+        """Find which session serves a URI (static first, then templates)."""
+        normalized = uri.rstrip("/")
+
+        if normalized in self.resource_to_session:
+            return self.resource_to_session[normalized]
+
+        for template, session in self.resource_templates:
+            # Turn "papers://{topic}" into a regex like "^papers://[^/]+$"
+            parts = re.split(r"\{[^}]+\}", template)
+            pattern = "^" + "[^/]+".join(re.escape(p) for p in parts) + "$"
+            if re.match(pattern, normalized):
+                return session
+
+        return None
+
+    async def read_resource(self, uri: str) -> str:
+        """Read a resource by URI and return its text."""
+        session = self._find_resource_session(uri)
+        if session is None:
+            return f"Error: no connected server provides resource {uri}"
+
+        try:
+            result = await session.read_resource(AnyUrl(uri))
+        except Exception as e:
+            return f"Error reading {uri}: {e}"
+
+        parts = []
+        for item in result.contents:
+            text = getattr(item, "text", None)
+            parts.append(text if text is not None else str(item))
+        return "\n".join(parts)
+
+    async def handle_resource_command(self, query: str):
+        """Handle `@folders` or `@topic [optional question]`."""
+        token, _, question = query[1:].partition(" ")
+        question = question.strip()
+
+        if not token:
+            print("Usage: @folders  or  @<topic> [question]")
+            return
+
+        uri = f"papers://{token}"
+        content = await self.read_resource(uri)
+
+        if not question:
+            print(f"\n{content}")
+            return
+
+        # Question after the resource: give the model the resource as context
+        await self.process_query(
+            f"Use this resource as context:\n\n{content}\n\nQuestion: {question}"
+        )
+
+    # ------------------------------------------------------------------
+    # Prompts
+    # ------------------------------------------------------------------
+
+    def list_prompts(self):
+        if not self.prompts:
+            print("\nNo prompts available.")
+            return
+
+        print("\nAvailable prompts:")
+        for name, (prompt, _) in self.prompts.items():
+            print(f"  - {name}: {prompt.description or ''}")
+            for arg in prompt.arguments or []:
+                required = " (required)" if arg.required else ""
+                print(f"      {arg.name}{required}")
+
+        print('\nUsage: /prompt <name> key=value key2="value with spaces"')
+
+    async def run_prompt(self, args: List[str]):
+        """Handle `/prompt <name> key=value ...`."""
+        if not args:
+            self.list_prompts()
+            return
+
+        name = args[0]
+        if name not in self.prompts:
+            print(f"\nUnknown prompt: {name}")
+            self.list_prompts()
+            return
+
+        _, session = self.prompts[name]
+
+        arguments = {}
+        for pair in args[1:]:
+            if "=" not in pair:
+                print(f"\nIgnoring '{pair}' (expected key=value)")
+                continue
+            key, value = pair.split("=", 1)
+            arguments[key] = value
+
+        try:
+            result = await session.get_prompt(name, arguments=arguments)
+        except Exception as e:
+            print(f"\nCould not load prompt '{name}': {e}")
+            return
+
+        texts = []
+        for message in result.messages:
+            content = message.content
+            text = getattr(content, "text", None)
+            texts.append(text if text is not None else str(content))
+
+        prompt_text = "\n".join(texts)
+        print(f"\nRunning prompt '{name}'...")
+        await self.process_query(prompt_text)
+
+    # ------------------------------------------------------------------
+    # Chat
+    # ------------------------------------------------------------------
 
     async def process_query(self, query: str):
         """Process a user query using Groq and MCP tools."""
@@ -186,10 +364,7 @@ class MCP_ChatBot:
 
                         tool_output = "\n".join(output_parts)
 
-                        # Newer mcp: is_error, older: isError
-                        if getattr(result, "is_error", False) or getattr(
-                            result, "isError", False
-                        ):
+                        if _get(result, "is_error", "isError", default=False):
                             tool_output = "Tool execution error: " + tool_output
 
                     except Exception as e:
@@ -203,22 +378,57 @@ class MCP_ChatBot:
                     "content": tool_output,
                 })
 
+    def print_help(self):
+        print("\nCommands:")
+        print("  @folders                 list saved topics (resource)")
+        print("  @<topic>                 show papers saved for a topic (resource)")
+        print("  @<topic> <question>      ask a question using that topic as context")
+        print("  /prompts                 list available prompts")
+        print("  /prompt <name> k=v ...   run a prompt, e.g.")
+        print('                           /prompt generate_search_prompt topic="machine learning" num_papers=3')
+        print("  /help                    show this help")
+        print("  quit                     exit")
+
     async def chat_loop(self):
         """Run an interactive chat loop."""
 
         print("\nMCP Chatbot Started!")
         print("Powered by Groq + MCP")
-        print("Type your queries or 'quit' to exit.")
+        print("Type a query, use @resource / /prompt commands, /help, or 'quit'.")
 
         while True:
             try:
                 query = await asyncio.to_thread(input, "\nQuery: ")
                 query = query.strip()
 
+                if not query:
+                    continue
+
                 if query.lower() == "quit":
                     break
 
-                if not query:
+                if query.startswith("@"):
+                    await self.handle_resource_command(query)
+                    continue
+
+                if query.startswith("/"):
+                    try:
+                        parts = shlex.split(query)
+                    except ValueError as e:
+                        print(f"\nCould not parse command: {e}")
+                        continue
+
+                    command = parts[0].lower()
+
+                    if command == "/prompts":
+                        self.list_prompts()
+                    elif command == "/prompt":
+                        await self.run_prompt(parts[1:])
+                    elif command == "/help":
+                        self.print_help()
+                    else:
+                        print(f"\nUnknown command: {command}")
+                        self.print_help()
                     continue
 
                 await self.process_query(query)
