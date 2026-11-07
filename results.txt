@@ -1,0 +1,29 @@
+Summary of Papers Related to "AI agents"
+
+1. Faith in AI can narrow the futures individuals consider (Naito & Shirado, 2026)
+   * Investigates how AI predictions influence human decision‑making using a Newcomb‑type experiment with 1,305 participants.
+   * When AI is perceived as a predictive authority, participants are three‑times more likely to forgo a guaranteed reward, reducing earnings by 10‑43%.
+   * Effect persists across different AI presentations, decision contexts, and even when AI predictions repeatedly fail.
+   * Highlights a behavioral risk: AI can subtly shape the set of futures people consider, beyond providing advice.
+
+2. Foundations of GenIR (Ai, Zhan & Liu, 2025)
+   * Explores how generative AI transforms Information Access (IA) systems, introducing two core capabilities: information generation and information synthesis.
+   * Information generation: AI creates tailored content directly for user queries.
+   * Information synthesis: AI integrates and reorganizes existing knowledge, mitigating hallucination by grounding responses in external sources.
+   * Discusses retrieval‑augmented generation, multi‑modal models, and challenges such as evaluation, bias, and privacy.
+   * Positions generative AI agents as the next‑generation IA paradigm, bridging content creation and synthesis.
+
+3. A cybersecurity AI agent selection and decision support framework (Malatji, 2025)
+   * Proposes a structured framework aligning AI agent architectures (reactive, cognitive, hybrid, learning) with the NIST Cybersecurity Framework (CSF) 2.0.
+   * Maps AI agent properties—autonomy, adaptive learning, real‑time responsiveness—to specific NIST CSF sub‑categories.
+   * Introduces graduated autonomy levels (assisted → augmented → fully autonomous) to match organisational maturity.
+   * Demonstrates how tailored AI agents can improve detection, incident response, and governance while adhering to industry standards.
+   * Provides a roadmap for deploying multi‑agent cybersecurity systems with empirical validation.
+
+Overall Insights:
+* "AI agents" span diverse domains: human behavioural influence, generative information access, and cybersecurity.
+* Across these fields, agency, autonomy, and trust emerge as recurring themes. The first paper warns of over‑trust shaping choices; the second leverages generative agents for knowledge synthesis; the third formalises agent autonomy for secure operations.
+* A common thread is the need for transparent, accountable design—whether to mitigate bias in decision‑making, ground generative outputs, or align with regulatory frameworks.
+* Future research could investigate unified metrics for agent trustworthiness and cross‑domain governance, linking behavioural findings with technical safeguards.
+
+--- End of Summary ---

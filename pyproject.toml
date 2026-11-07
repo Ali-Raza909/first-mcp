@@ -7,7 +7,12 @@ authors = [
     { name = "Ali-Raza909", email = "ar2014958@gmail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "arxiv>=4.0.2",
+    "groq>=1.7.0",
+    "mcp<2",
+    "python-dotenv>=1.2.4",
+]
 
 [project.scripts]
 first-mcp = "first_mcp:main"
